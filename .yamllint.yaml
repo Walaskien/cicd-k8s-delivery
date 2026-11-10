@@ -1,0 +1,14 @@
+extends: default
+
+ignore: |
+  .venv/
+  .tools/
+  chart/greeter/templates/
+
+rules:
+  line-length:
+    max: 120
+  truthy:
+    # "on:" in workflows would otherwise be flagged
+    check-keys: false
+  document-start: disable
