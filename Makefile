@@ -9,7 +9,7 @@ VENV := .venv/bin
 # current context, which is not what you want on a machine with other clusters
 export KUBECONFIG := $(CURDIR)/.kubeconfig
 
-.PHONY: venv lint test build kind-up deploy smoke kind-down
+.PHONY: venv lint test build kind-up deploy smoke rollback-demo kind-down
 
 venv:
 	python3 -m venv .venv
@@ -39,6 +39,10 @@ deploy: build
 
 smoke:
 	scripts/smoke.sh $(TAG)
+
+rollback-demo: build
+	kind load docker-image $(IMAGE):$(TAG) --name $(CLUSTER)
+	scripts/rollback-demo.sh $(IMAGE) $(TAG) $(FAULT)
 
 kind-down:
 	kind delete cluster --name $(CLUSTER) --kubeconfig $(KUBECONFIG)

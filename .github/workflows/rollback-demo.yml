@@ -1,0 +1,54 @@
+name: rollback-demo
+
+on:
+  workflow_dispatch:
+    inputs:
+      fault:
+        description: Fault shipped in the second release
+        type: choice
+        options:
+          - crash-on-start
+          - unhealthy
+          - broken-endpoint
+          - none
+        default: crash-on-start
+
+permissions:
+  contents: read
+
+jobs:
+  demo:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: azure/setup-helm@v5
+        with:
+          version: v4.2.4
+          token: ${{ secrets.GITHUB_TOKEN }}
+      - uses: helm/kind-action@v1
+        with:
+          version: v0.33.0
+          config: kind/cluster.yaml
+          cluster_name: demo
+      - name: build and load the image
+        run: |
+          docker build -t greeter:demo --build-arg APP_VERSION=demo .
+          kind load docker-image greeter:demo --name demo
+      - name: install, break, roll back
+        env:
+          FAULT: ${{ inputs.fault }}
+        run: scripts/rollback-demo.sh greeter demo "$FAULT"
+      - name: history in the run summary
+        if: always()
+        run: |
+          {
+            echo '```'
+            helm history greeter -n demo || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: cluster state
+        if: failure()
+        run: |
+          kubectl -n demo get all
+          kubectl -n demo describe pods
