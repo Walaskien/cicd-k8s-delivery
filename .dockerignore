@@ -1,0 +1,12 @@
+.git
+.github
+.venv
+.tools
+.kubeconfig
+chart
+kind
+scripts
+tests
+**/__pycache__
+.pytest_cache
+.ruff_cache
