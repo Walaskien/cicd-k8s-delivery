@@ -1,0 +1,6 @@
+apiVersion: v2
+name: greeter
+description: Small Flask service used as a target for the delivery pipeline
+type: application
+version: 0.1.0
+appVersion: "0.1.0"

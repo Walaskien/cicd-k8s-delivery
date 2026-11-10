@@ -1,0 +1,41 @@
+replicaCount: 2
+
+image:
+  repository: ghcr.io/walaskien/cicd-k8s-delivery
+  # CI always overrides this with the commit sha
+  tag: latest
+  pullPolicy: IfNotPresent
+
+service:
+  port: 80
+
+# Becomes the ConfigMap, which the pod reads as env vars.
+config:
+  greeting: "hello from kubernetes"
+  # Fault injection for the rollback demo. Leave empty for a normal release.
+  # One of: crash-on-start, unhealthy, broken-endpoint
+  fault: ""
+
+# Starting values, not tuned against any measurement.
+resources:
+  requests:
+    cpu: 50m
+    memory: 64Mi
+  limits:
+    cpu: 250m
+    memory: 128Mi
+
+readinessProbe:
+  httpGet:
+    path: /health
+    port: http
+  periodSeconds: 5
+  failureThreshold: 3
+
+livenessProbe:
+  httpGet:
+    path: /health
+    port: http
+  initialDelaySeconds: 10
+  periodSeconds: 10
+  failureThreshold: 3
