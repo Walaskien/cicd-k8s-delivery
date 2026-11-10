@@ -91,7 +91,8 @@ Not verified, because it needs GitHub:
 - kind in CI is created from scratch on every run, so the regular `ci` deploy job only ever sees revision 1. A failed smoke test there falls back to uninstall. The real rollback path is exercised by the `rollback-demo` workflow, which installs a good revision first.
 - The fault is a switch in the app, set from the chart values. It is not a real regression, just a reliable way to make one.
 - The smoke test is three HTTP checks through a port-forward to one pod. No ingress, no load, nothing about data.
-- Timeouts (90s for a deploy, 45s for the bad upgrade in the demo) were picked for an idle machine. While other containers were hammering the same Colima VM, a rollout that passes on an idle machine hit the timeout and the run failed with `Pending termination`. If you run it on a busy host, raise `HELM_TIMEOUT`.
+- Timeouts (90s for a deploy, 45s for the bad upgrade in the demo) were picked for an idle machine. While other containers were hammering the same Colima VM, a rollout that normally passes hit the timeout and the run failed with `Pending termination`. On a busy host raise `HELM_TIMEOUT`, and `BAD_TIMEOUT` for the demo.
+- For the same reason the `broken-endpoint` row is timing dependent. On a quiet machine the smoke test catches it. On the loaded VM with a 60s limit the new pod was not even ready in time, so Helm rolled back first and the smoke test never ran. With `BAD_TIMEOUT=120s` it was the smoke test again. The end state (healthy release back) was the same every time.
 - Helm is pinned to v4. `--rollback-on-failure` is the Helm 4 name of what Helm 3 called `--atomic`, and the scripts would need that one flag changed for Helm 3.
 - Two replicas on one kind node, no PodDisruptionBudget, no HPA. CPU and memory requests/limits in `values.yaml` are starting guesses, not measured.
 - The base image is pinned by tag, not digest. No image scanning or signing.

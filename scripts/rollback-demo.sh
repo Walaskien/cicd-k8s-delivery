@@ -33,7 +33,7 @@ else
 fi
 # shorter timeout here, the broken pods are not going to recover
 rc=0
-HELM_TIMEOUT=45s "$root/scripts/deploy.sh" "$repo" "$tag" "${change[@]}" || rc=$?
+HELM_TIMEOUT=${BAD_TIMEOUT:-45s} "$root/scripts/deploy.sh" "$repo" "$tag" "${change[@]}" || rc=$?
 
 echo
 echo "### release history"
