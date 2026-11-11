@@ -70,21 +70,33 @@ REVISION  STATUS      DESCRIPTION
 
 ## Verified
 
-Run on a Mac under Colima, kind v0.33.0 with node image v1.35.8, Helm v4.2.4:
+### On GitHub Actions
+
+Hosted runner `ubuntu-24.04` (Docker 28.0.4), Helm v4.2.4 from `azure/setup-helm@v5`, kind v0.33.0 from `helm/kind-action@v1`, node image v1.35.8.
+
+- `ci` on `main`: all five jobs green on the first run (lint, test, build, deploy-kind, publish), 2m18s end to end. A second run after small workflow edits took 2m13s. Rough job times from the first run: lint 18s, test 11s, build 21s, deploy-kind 64s, publish 22s.
+- The buildx tarball goes through upload-artifact and download-artifact into two other jobs, and `docker load` and `kind load` worked on it. The smoke test reported the commit sha as the version, so the pod ran the image that was built in that run.
+- GHCR push works with only `GITHUB_TOKEN` and `packages: write` on the publish job. Both `:latest` and the commit sha tag answer a manifest request with no credentials (HTTP 200 against ghcr.io with an anonymous pull token), so the package came out public, no manual step on the owner side. I did not read the package settings page, my token has no `read:packages`, and I did not `docker pull` and run the image from there.
+- `rollback-demo` dispatched once per fault, all four green, 1m25s to 2m0s each:
+  - `crash-on-start` and `unhealthy`: upgrade failed on the 45s timeout, Helm rolled back on its own, history shows revision 3 as `Rollback to 1`, smoke test passed afterwards.
+  - `broken-endpoint`: Helm called the upgrade complete, `smoke FAIL: GET /`, then `helm rollback`, history again ends with `Rollback to 1`.
+  - `none`: upgrade kept.
+
+### Locally
+
+Mac under Colima, same kind and Helm versions:
 
 - `pytest`: 8 passed, on Python 3.9 in a venv and on 3.12 inside `python:3.12-slim`.
 - `ruff check`, `ruff format --check`, `yamllint -s`, `hadolint` (2.15.1), `shellcheck` on the scripts, `helm lint --strict`, `kubeconform -strict` (3 resources valid): all clean.
 - `actionlint` 1.7.12 on both workflow files: no findings.
 - `docker build`, then the container run with a read-only root filesystem as uid 10001: `/health`, `/` and `/metrics` answer. `APP_FAULT=crash-on-start` exits with code 3.
-- `make kind-up`, `make deploy`, `make smoke` against a real kind cluster: release installs, 2 pods ready, smoke passes.
-- `scripts/rollback-demo.sh` against that cluster with each of `crash-on-start`, `unhealthy`, `broken-endpoint` and `none`: each ended with the expected outcome (helm rollback for the first two, smoke-test rollback for the third, upgrade kept for the control), `helm status` = deployed, smoke test passing afterwards. A control run also confirmed that changing only the ConfigMap restarts the pods, through the `checksum/config` annotation.
+- `make kind-up`, `make deploy`, `make smoke` and `scripts/rollback-demo.sh` with all four faults against a real kind cluster, same outcomes as on GitHub. A control run also confirmed that changing only the ConfigMap restarts the pods, through the `checksum/config` annotation.
 - A smoke failure on a first install, where there is no earlier revision, falls back to `helm uninstall`. I only saw this once, by accident, when a bug in my own trap made a passing smoke test exit non-zero.
 
-Not verified, because it needs GitHub:
+### Not verified
 
-- The workflows have not run on GitHub yet. The first push may need a small fix.
-- The buildx `type=docker` tarball, artifact upload/download, `helm/kind-action`, `azure/setup-helm` and the GHCR push were checked only by reading the docs and by actionlint. Locally the image was built with the plain Docker builder and loaded into kind directly.
-- Whether the GHCR package ends up public. The Dockerfile sets `org.opencontainers.image.source`, which should link the package to the repo, but the visibility is a setting on GitHub.
+- The `pull_request` path (build and deploy without the publish job) has not run yet, only pushes and manual dispatches.
+- The `cancel-in-progress` rule for PRs.
 
 ## Limitations
 
