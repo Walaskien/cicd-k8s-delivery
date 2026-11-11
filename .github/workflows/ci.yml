@@ -20,7 +20,7 @@ env:
 
 jobs:
   lint:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
@@ -39,7 +39,6 @@ jobs:
       - uses: azure/setup-helm@v5
         with:
           version: ${{ env.HELM_VERSION }}
-          token: ${{ secrets.GITHUB_TOKEN }}
       - run: helm lint chart/greeter --strict
       - name: kubeconform
         run: |
@@ -47,7 +46,7 @@ jobs:
             docker run --rm -i ghcr.io/yannh/kubeconform:v0.8.0 -strict -summary -
 
   test:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
@@ -64,7 +63,7 @@ jobs:
   # the image that gets pushed is the one that was tested in kind.
   build:
     needs: [lint, test]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
       - uses: docker/setup-buildx-action@v4
@@ -83,7 +82,7 @@ jobs:
 
   deploy-kind:
     needs: build
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
       - uses: actions/download-artifact@v8
@@ -94,7 +93,6 @@ jobs:
       - uses: azure/setup-helm@v5
         with:
           version: ${{ env.HELM_VERSION }}
-          token: ${{ secrets.GITHUB_TOKEN }}
       - uses: helm/kind-action@v1
         with:
           version: ${{ env.KIND_VERSION }}
@@ -115,7 +113,7 @@ jobs:
   publish:
     needs: deploy-kind
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
       packages: write
