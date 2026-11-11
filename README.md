@@ -1,5 +1,7 @@
 # cicd-k8s-delivery
 
+[![ci](https://github.com/Walaskien/cicd-k8s-delivery/actions/workflows/ci.yml/badge.svg)](https://github.com/Walaskien/cicd-k8s-delivery/actions/workflows/ci.yml)
+
 A small Flask service and the pipeline that ships it: lint, tests, one image build, a Helm deploy into a throwaway kind cluster inside GitHub Actions, a smoke test, and an automatic rollback when the new release is bad.
 
 ## The problem
