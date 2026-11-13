@@ -1,3 +1,6 @@
+import json
+from pathlib import Path
+
 import pytest
 from prometheus_client import REGISTRY
 
@@ -71,3 +74,10 @@ def test_crash_on_start(monkeypatch):
 def test_unknown_fault_is_rejected(monkeypatch):
     with pytest.raises(ValueError):
         make_client(monkeypatch, APP_FAULT="unhealty")
+
+
+def test_chart_schema_fault_list_matches_the_app():
+    path = Path(__file__).resolve().parent.parent / "chart/greeter/values.schema.json"
+    schema = json.loads(path.read_text())
+    allowed = schema["properties"]["config"]["properties"]["fault"]["enum"]
+    assert tuple(allowed) == ("",) + server.FAULTS

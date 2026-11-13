@@ -21,6 +21,7 @@ lint:
 	$(VENV)/yamllint -s .
 	docker run --rm -i hadolint/hadolint < Dockerfile
 	helm lint chart/greeter --strict
+	scripts/check-schema.sh
 	helm template greeter chart/greeter | \
 		docker run --rm -i ghcr.io/yannh/kubeconform:v0.8.0 -strict -summary -
 

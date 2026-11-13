@@ -61,6 +61,8 @@ On GitHub: Actions, `rollback-demo`, Run workflow, pick a fault.
 | `broken-endpoint` | `/health` is fine, `/` returns 500 | only the smoke test, then `helm rollback` |
 | `none` | control run, changes the greeting only | nobody, the upgrade stays |
 
+An unknown value in `config.fault` (a typo like `unhealty`) is refused by `chart/greeter/values.schema.json` before anything is deployed, so it never turns into crashing pods and a 90 second wait. `replicaCount`, `service.port` and `image.pullPolicy` are checked the same way.
+
 The history after a caught fault looks like this (revision 3 is the rollback, it is a new revision that restores the values of revision 1):
 
 ```
@@ -88,8 +90,9 @@ Hosted runner `ubuntu-24.04` (Docker 28.0.4), Helm v4.2.4 from `azure/setup-helm
 
 Mac under Colima, same kind and Helm versions:
 
-- `pytest`: 16 passed on Python 3.9 in a venv (8 for the app, 8 for the exit codes of `deploy.sh` and `rollback-demo.sh`, run against stub `helm`, `kubectl` and `smoke.sh`, not a cluster). The app tests also passed on 3.12 inside `python:3.12-slim` earlier.
+- `pytest`: 17 passed on Python 3.9 in a venv (9 for the app, 8 for the exit codes of `deploy.sh` and `rollback-demo.sh`, run against stub `helm`, `kubectl` and `smoke.sh`, not a cluster). The app tests also passed on 3.12 inside `python:3.12-slim` earlier.
 - `ruff check`, `ruff format --check`, `yamllint -s`, `hadolint` (2.15.1), `shellcheck` on the scripts, `helm lint --strict`, `kubeconform -strict` (3 resources valid): all clean.
+- `scripts/check-schema.sh` (helm 4.2.4): `helm template --set config.fault=unhealty` fails with `values don't meet the specifications of the schema(s)` and `at '/config/fault': value must be one of '', 'crash-on-start', 'unhealthy', 'broken-endpoint'`; `replicaCount=0` fails with `minimum: got 0, want 1`; the four real faults render.
 - `actionlint` 1.7.12 on both workflow files: no findings.
 - `docker build`, then the container run with a read-only root filesystem as uid 10001: `/health`, `/` and `/metrics` answer. `APP_FAULT=crash-on-start` exits with code 3.
 - `make kind-up`, `make deploy`, `make smoke` and `scripts/rollback-demo.sh` with all four faults against a real kind cluster, same outcomes as on GitHub. A control run also confirmed that changing only the ConfigMap restarts the pods, through the `checksum/config` annotation.

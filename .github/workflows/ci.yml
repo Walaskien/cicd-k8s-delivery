@@ -40,6 +40,8 @@ jobs:
         with:
           version: ${{ env.HELM_VERSION }}
       - run: helm lint chart/greeter --strict
+      - name: chart schema
+        run: scripts/check-schema.sh
       - name: kubeconform
         run: |
           helm template greeter chart/greeter |
