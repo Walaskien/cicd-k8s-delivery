@@ -53,6 +53,16 @@ case $rc in
   *) echo "unexpected exit code $rc" >&2; exit 1 ;;
 esac
 
+# deploy.sh also returns 2 when helm upgrade fails before anything was
+# deployed (bad flag, API down). Then there is no bad revision to roll back
+# from, so the history has to show the rollback itself.
+history=$(helm history "$release" -n "$ns" -o json)
+if ! jq -e 'sort_by(.revision) | length >= 3 and (last | .status == "deployed" and (.description | startswith("Rollback to")))' <<<"$history" >/dev/null; then
+  echo "no rollback revision in the history, the bad release was never deployed:" >&2
+  jq -c '[.[] | {revision, status, description}]' <<<"$history" >&2
+  exit 1
+fi
+
 # Whatever caught it, the cluster has to be serving the good release now.
 status=$(helm status "$release" -n "$ns" -o json | jq -r .info.status)
 [[ $status == deployed ]] || { echo "release status is $status" >&2; exit 1; }
