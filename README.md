@@ -22,9 +22,13 @@ flowchart LR
     up -->|ok| smoke[smoke test]
     smoke -->|fails| rb2[helm rollback to last good revision]
     smoke -->|ok| pub[push to GHCR, main only]
+    build -->|tar artifact| rbk["rollback job, 4 faults<br/>(good release, bad release, rollback)"]
+    rbk -->|all 4 pass| pub
 ```
 
 The image is built once and passed along as a tarball. It is loaded into kind for the deploy, and the same tarball is what gets pushed to GHCR afterwards, so the pushed image is the one that passed the smoke test. Nothing is pushed from pull requests.
+
+The `rollback` job runs `scripts/rollback-demo.sh` for each fault (matrix, parallel with `deploy-kind`) on every push and PR, and `publish` waits for it, so an image is only pushed after the four rollback cases passed.
 
 Two separate things can catch a bad release:
 
@@ -98,6 +102,8 @@ Mac under Colima, same kind and Helm versions:
 - `make kind-up`, `make deploy`, `make smoke` and `scripts/rollback-demo.sh` with all four faults against a real kind cluster, same outcomes as on GitHub. A control run also confirmed that changing only the ConfigMap restarts the pods, through the `checksum/config` annotation.
 - A smoke failure on a first install, where there is no earlier revision, falls back to `helm uninstall`. I only saw this once, by accident, when a bug in my own trap made a passing smoke test exit non-zero.
 
+- The `rollback` job was checked on two throwaway branches (deleted afterwards): with `scripts/smoke.sh` cut short so it no longer checks `/`, `ci` was green without the job (run 44070686578) and red with it, `rollback (broken-endpoint)` failing with `the broken release was NOT caught` (run 44070699646). Breaking the `exit 3` in `deploy.sh` instead is caught earlier by `pytest`.
+
 ### Not verified
 
 - The `pull_request` path (build and deploy without the publish job) has not run yet, only pushes and manual dispatches.
@@ -105,7 +111,7 @@ Mac under Colima, same kind and Helm versions:
 
 ## Limitations
 
-- kind in CI is created from scratch on every run, so the regular `ci` deploy job only ever sees revision 1. A failed smoke test there falls back to uninstall. The real rollback path is exercised by the `rollback-demo` workflow, which installs a good revision first.
+- kind in CI is created from scratch on every run, so the regular `ci` deploy job only ever sees revision 1. A failed smoke test there falls back to uninstall. The rollback path is exercised by the `rollback` job, which installs a good revision first. That job builds nothing itself, it loads the image from the `build` job; the manual `rollback-demo` workflow still rebuilds its own image.
 - The fault is a switch in the app, set from the chart values. It is not a real regression, just a reliable way to make one.
 - The smoke test is three HTTP checks through a port-forward to one pod. No ingress, no load, nothing about data.
 - Timeouts (90s for a deploy, 45s for the bad upgrade in the demo) were picked for an idle machine. While other containers were hammering the same Colima VM, a rollout that normally passes hit the timeout and the run failed with `Pending termination`. On a busy host raise `HELM_TIMEOUT`, and `BAD_TIMEOUT` for the demo.

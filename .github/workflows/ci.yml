@@ -112,8 +112,52 @@ jobs:
           kubectl -n demo logs -l app.kubernetes.io/name=greeter --all-containers --tail=50
           helm history greeter -n demo
 
+  # deploy-kind only ever sees revision 1, so the rollback path needs its own
+  # run: good release, bad release, check that the history ends on a rollback.
+  rollback:
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        fault: [crash-on-start, unhealthy, broken-endpoint, none]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          name: image
+          path: ${{ runner.temp }}
+      - run: docker load -i "$RUNNER_TEMP/greeter.tar"
+      - uses: azure/setup-helm@v5
+        with:
+          version: ${{ env.HELM_VERSION }}
+      - uses: helm/kind-action@v1
+        with:
+          version: ${{ env.KIND_VERSION }}
+          config: kind/cluster.yaml
+          cluster_name: ci
+      - name: load image into kind
+        run: kind load docker-image "greeter:${GITHUB_SHA}" --name ci
+      - name: install, break, roll back
+        run: scripts/rollback-demo.sh greeter "$GITHUB_SHA" "${{ matrix.fault }}"
+      - name: history in the run summary
+        if: always()
+        run: |
+          {
+            echo '```'
+            helm history greeter -n demo || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: cluster state
+        if: failure()
+        run: |
+          kubectl -n demo get all
+          kubectl -n demo describe pods
+          helm history greeter -n demo
+
   publish:
-    needs: deploy-kind
+    needs: [deploy-kind, rollback]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
     permissions:
