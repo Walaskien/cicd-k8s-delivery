@@ -2,72 +2,33 @@
 
 [![ci](https://github.com/Walaskien/cicd-k8s-delivery/actions/workflows/ci.yml/badge.svg)](https://github.com/Walaskien/cicd-k8s-delivery/actions/workflows/ci.yml)
 
-A small Flask service and the pipeline that ships it: lint, tests, one image build, a Helm deploy into a throwaway kind cluster inside GitHub Actions, a smoke test, and an automatic rollback when the new release is bad.
+A small Flask service and a GitHub Actions pipeline that ships it. I built it to see a bad release get caught and rolled back by the pipeline itself, and to be able to trigger that on demand instead of waiting for a real bad deploy.
 
-## The problem
+The pipeline runs lint and tests, builds the image once, deploys it with Helm into a throwaway kind cluster, runs a smoke test, and rolls back if the release is bad. It only ever deploys to kind inside the CI runner. The image is passed between jobs as a tarball, and the same tarball is pushed to GHCR from `main` after the deploy and the four rollback cases pass. Nothing is pushed from pull requests.
 
-"helm upgrade exited 0" is a weak signal. A release can be rolled out with all probes green and still return errors on the one endpoint people actually use, and a release with a crashing pod can sit half-rolled-out until someone notices. I wanted to see both cases handled by the pipeline itself, and to be able to trigger them on demand instead of waiting for a real bad deploy.
+Two things can catch a bad release. Helm does it through the readiness probe and `--rollback-on-failure` when pods never become ready. `scripts/smoke.sh` does it when the release is ready but wrong, and then `scripts/deploy.sh` runs `helm rollback` to the last superseded revision.
 
-## Pipeline
-
-```mermaid
-flowchart LR
-    push[push / PR] --> lint
-    push --> test
-    lint --> build[build image once]
-    test --> build
-    build -->|tar artifact| kind[kind cluster in CI]
-    kind --> up["helm upgrade --install<br/>--rollback-on-failure"]
-    up -->|probes fail| rb1[helm rolls back]
-    up -->|ok| smoke[smoke test]
-    smoke -->|fails| rb2[helm rollback to last good revision]
-    smoke -->|ok| pub[push to GHCR, main only]
-    build -->|tar artifact| rbk["rollback job, 4 faults<br/>(good release, bad release, rollback)"]
-    rbk -->|all 4 pass| pub
-```
-
-The image is built once and passed along as a tarball. It is loaded into kind for the deploy, and the same tarball is what gets pushed to GHCR afterwards, so the pushed image is the one that passed the smoke test. Nothing is pushed from pull requests.
-
-The `rollback` job runs `scripts/rollback-demo.sh` for each fault (matrix, parallel with `deploy-kind`) on every push and PR, and `publish` waits for it, so an image is only pushed after the four rollback cases passed.
-
-Two separate things can catch a bad release:
-
-- Helm itself, through the readiness probe and `--rollback-on-failure`, for pods that never become ready.
-- `scripts/smoke.sh`, for a release that is ready but wrong. If it fails, `scripts/deploy.sh` runs `helm rollback` to the last superseded revision.
-
-## Quick start
+## Run it
 
 You need docker, kind, helm 4, kubectl, jq and python3.
 
 ```
-make venv           # python deps (ruff, pytest, yamllint)
-make lint           # ruff, yamllint, hadolint, helm lint, kubeconform
+make venv
+make lint
 make test
 make kind-up        # cluster "cicd-demo", kubeconfig goes to ./.kubeconfig
 make deploy         # build, load into kind, helm upgrade --install, smoke test
-make smoke
 make rollback-demo FAULT=broken-endpoint
 make kind-down
 ```
 
-`make kind-up` writes its own `.kubeconfig` in the repo and the Makefile points `KUBECONFIG` at it, so your current kubectl context is not switched. The smoke test uses a port-forward on 18480 (`SMOKE_PORT=...` to change it).
-
-On GitHub: Actions, `rollback-demo`, Run workflow, pick a fault.
+The Makefile points `KUBECONFIG` at the repo's own `.kubeconfig`, so your current kubectl context is not touched. On GitHub you can also run the `rollback-demo` workflow and pick a fault.
 
 ## Rollback demo
 
-`scripts/rollback-demo.sh` installs a healthy release (revision 1), upgrades it with a fault switched on through `config.fault` in the chart values, and then checks that the release is `deployed`, the fault is gone from the values, and the smoke test passes again.
+`scripts/rollback-demo.sh` installs a healthy release, upgrades it with a fault switched on through `config.fault` in the chart values, and checks that the release ends up `deployed`, the fault is gone from the values and the smoke test passes again. The faults are `crash-on-start` and `unhealthy`, which Helm catches itself, `broken-endpoint` (`/health` is fine, `/` returns 500), which only the smoke test catches, and `none` as a control run where the upgrade stays.
 
-| fault | what the app does | who notices |
-| --- | --- | --- |
-| `crash-on-start` | exits while booting | Helm: pods never become ready, upgrade times out and is rolled back |
-| `unhealthy` | `/health` returns 503 | Helm, same way, through the readiness probe |
-| `broken-endpoint` | `/health` is fine, `/` returns 500 | only the smoke test, then `helm rollback` |
-| `none` | control run, changes the greeting only | nobody, the upgrade stays |
-
-An unknown value in `config.fault` (a typo like `unhealty`) is refused by `chart/greeter/values.schema.json` before anything is deployed, so it never turns into crashing pods and a 90 second wait. `replicaCount`, `service.port` and `image.pullPolicy` are checked the same way.
-
-The history after a caught fault looks like this (revision 3 is the rollback, it is a new revision that restores the values of revision 1):
+After a caught fault the history looks like this. Revision 3 is the rollback, a new revision that restores the values of revision 1:
 
 ```
 REVISION  STATUS      DESCRIPTION
@@ -76,61 +37,34 @@ REVISION  STATUS      DESCRIPTION
 3         deployed    Rollback to 1
 ```
 
-## Verified
+A typo in `config.fault` is refused by `chart/greeter/values.schema.json` before anything is deployed.
 
-### On GitHub Actions
+## What was hard
 
-Hosted runner `ubuntu-24.04` (Docker 28.0.4), Helm v4.2.4 from `azure/setup-helm@v5`, kind v0.33.0 from `helm/kind-action@v1`, node image v1.35.8.
+Timing. The timeouts (90s for a deploy, 45s for the bad upgrade in the demo) were picked for an idle machine. While other containers were busy on the same Colima VM, a rollout that normally passes hit the timeout. The `broken-endpoint` case was affected too: with a 60s limit on the loaded VM the new pod was not ready in time, so Helm rolled back first and the smoke test never ran. With `BAD_TIMEOUT=120s` the smoke test caught it again. The end state was the same every time. On a busy host raise `HELM_TIMEOUT` and `BAD_TIMEOUT`.
 
-- `ci` on `main`: all five jobs green on the first run (lint, test, build, deploy-kind, publish), 2m18s end to end. A second run after small workflow edits took 2m13s. Rough job times from the first run: lint 18s, test 11s, build 21s, deploy-kind 64s, publish 22s.
-- The buildx tarball goes through upload-artifact and download-artifact into two other jobs, and `docker load` and `kind load` worked on it. The smoke test reported the commit sha as the version, so the pod ran the image that was built in that run.
-- GHCR push works with only `GITHUB_TOKEN` and `packages: write` on the publish job. Both `:latest` and the commit sha tag answer a manifest request with no credentials (HTTP 200 against ghcr.io with an anonymous pull token), so the package came out public, no manual step on the owner side. I did not read the package settings page, my token has no `read:packages`, and I did not `docker pull` and run the image from there.
-- `rollback-demo` dispatched once per fault, all four green, 1m25s to 2m0s each:
-  - `crash-on-start` and `unhealthy`: upgrade failed on the 45s timeout, Helm rolled back on its own, history shows revision 3 as `Rollback to 1`, smoke test passed afterwards.
-  - `broken-endpoint`: Helm called the upgrade complete, `smoke FAIL: GET /`, then `helm rollback`, history again ends with `Rollback to 1`.
-  - `none`: upgrade kept.
+## What I checked and what I did not
 
-### Locally
+On GitHub Actions (ubuntu-24.04, Helm v4.2.4, kind v0.33.0):
 
-Mac under Colima, same kind and Helm versions:
+- `ci` on `main` is green on all jobs, about 2m15s end to end on the first runs.
+- `rollback-demo` ran once per fault, all four green, and the history ended with `Rollback to 1` each time except `none`.
+- GHCR push works with only `GITHUB_TOKEN`. Both tags answered an anonymous manifest request. I did not pull and run the image from there.
+- The `rollback` job in `ci` was checked on two throwaway branches. With `smoke.sh` cut short so it no longer checks `/`, `ci` was green without the job and red with it (`the broken release was NOT caught`).
 
-- `pytest`: 17 passed on Python 3.9 in a venv (9 for the app, 8 for the exit codes of `deploy.sh` and `rollback-demo.sh`, run against stub `helm`, `kubectl` and `smoke.sh`, not a cluster). The app tests also passed on 3.12 inside `python:3.12-slim` earlier.
-- `ruff check`, `ruff format --check`, `yamllint -s`, `hadolint` (2.15.1), `shellcheck` on the scripts, `helm lint --strict`, `kubeconform -strict` (3 resources valid): all clean.
-- `scripts/check-schema.sh` (helm 4.2.4): `helm template --set config.fault=unhealty` fails with `values don't meet the specifications of the schema(s)` and `at '/config/fault': value must be one of '', 'crash-on-start', 'unhealthy', 'broken-endpoint'`; `replicaCount=0` fails with `minimum: got 0, want 1`; the four real faults render.
-- `actionlint` 1.7.12 on both workflow files: no findings.
-- `docker build`, then the container run with a read-only root filesystem as uid 10001: `/health`, `/` and `/metrics` answer. `APP_FAULT=crash-on-start` exits with code 3.
-- `make kind-up`, `make deploy`, `make smoke` and `scripts/rollback-demo.sh` with all four faults against a real kind cluster, same outcomes as on GitHub. A control run also confirmed that changing only the ConfigMap restarts the pods, through the `checksum/config` annotation.
-- A smoke failure on a first install, where there is no earlier revision, falls back to `helm uninstall`. I only saw this once, by accident, when a bug in my own trap made a passing smoke test exit non-zero.
+Locally on a Mac under Colima:
 
-- The `rollback` job was checked on two throwaway branches (deleted afterwards): with `scripts/smoke.sh` cut short so it no longer checks `/`, `ci` was green without the job (run 44070686578) and red with it, `rollback (broken-endpoint)` failing with `the broken release was NOT caught` (run 44070699646). Breaking the `exit 3` in `deploy.sh` instead is caught earlier by `pytest`.
+- `pytest`, 17 passed on Python 3.9. 8 of them test the exit codes of `deploy.sh` and `rollback-demo.sh` against stub `helm`, `kubectl` and `smoke.sh`, not a cluster.
+- `ruff`, `yamllint`, `hadolint`, `shellcheck`, `helm lint --strict`, `kubeconform -strict` and `actionlint` are clean.
+- `make deploy`, `make smoke` and all four faults against a real kind cluster gave the same outcomes as on GitHub.
 
-### Not verified
+Not checked: the `pull_request` path has not run yet (only pushes and manual dispatches), and neither has the `cancel-in-progress` rule for PRs.
 
-- The `pull_request` path (build and deploy without the publish job) has not run yet, only pushes and manual dispatches.
-- The `cancel-in-progress` rule for PRs.
+Not done:
 
-## Limitations
-
-- kind in CI is created from scratch on every run, so the regular `ci` deploy job only ever sees revision 1. A failed smoke test there falls back to uninstall. The rollback path is exercised by the `rollback` job, which installs a good revision first. That job builds nothing itself, it loads the image from the `build` job; the manual `rollback-demo` workflow still rebuilds its own image.
-- The fault is a switch in the app, set from the chart values. It is not a real regression, just a reliable way to make one.
-- The smoke test is three HTTP checks through a port-forward to one pod. No ingress, no load, nothing about data.
-- Timeouts (90s for a deploy, 45s for the bad upgrade in the demo) were picked for an idle machine. While other containers were hammering the same Colima VM, a rollout that normally passes hit the timeout and the run failed with `Pending termination`. On a busy host raise `HELM_TIMEOUT`, and `BAD_TIMEOUT` for the demo.
-- For the same reason the `broken-endpoint` row is timing dependent. On a quiet machine the smoke test catches it. On the loaded VM with a 60s limit the new pod was not even ready in time, so Helm rolled back first and the smoke test never ran. With `BAD_TIMEOUT=120s` it was the smoke test again. The end state (healthy release back) was the same every time.
-- Helm is pinned to v4. `--rollback-on-failure` is the Helm 4 name of what Helm 3 called `--atomic`, and the scripts would need that one flag changed for Helm 3.
-- Two replicas on one kind node, no PodDisruptionBudget, no HPA. CPU and memory requests/limits in `values.yaml` are starting guesses, not measured.
+- kind in CI is created fresh every run, so the regular deploy job only sees revision 1. A failed smoke test there falls back to `helm uninstall`. The rollback path is exercised by the `rollback` job, which installs a good revision first.
+- The fault is a switch in the app, not a real regression.
+- The smoke test is three HTTP checks through a port-forward to one pod. No ingress, no load.
+- Helm is pinned to v4. `--rollback-on-failure` is what Helm 3 called `--atomic`, so Helm 3 would need that one flag changed.
+- No PodDisruptionBudget or HPA, and the resource requests and limits are guesses, not measured.
 - The base image is pinned by tag, not digest. No image scanning or signing.
-
-## Layout
-
-```
-app/                  Flask service, requirements
-tests/                pytest
-Dockerfile
-chart/greeter/        Helm chart: deployment, service, configmap
-kind/cluster.yaml     kind cluster, node image pinned by digest
-scripts/deploy.sh     helm upgrade, smoke test, rollback on failure
-scripts/smoke.sh      checks /health, /, /metrics
-scripts/rollback-demo.sh
-.github/workflows/    ci.yml, rollback-demo.yml
-Makefile
-```
